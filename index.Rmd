@@ -1,0 +1,199 @@
+---
+title: "HumanActivityRecognition-Prediction"
+author: "Shashank Sane"
+date: "April 20, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it.
+
+In this project, we will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participant They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. The five ways are exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E). Only Class A corresponds to correct performance. The goal of this project is to predict the manner in which they did the exercise, i.e., Class A to E. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+
+### 
+load required libraries
+```{r chunk1}
+library(plyr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(caret)
+library(rpart)
+library(randomForest)
+
+```
+
+### 
+load the data file
+```{r chunk2}
+
+# url of the training data file
+fileURL.Training <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+
+# url of the testing data file
+fileURL.Test <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+# Destination training file name
+DestinationTrainFile <- "pml-training.csv"
+
+# Download training file if does not exist in workspace
+if (!file.exists(DestinationTrainFile)){
+  download.file(fileURL.Training, DestinationTrainFile)
+}
+
+## read file into training data frame
+dfTrain <- read.csv(DestinationTrainFile,header = TRUE,stringsAsFactors = FALSE,na.strings = "NA")
+
+# Destination Testing file name
+DestinationTestFile <- "pml-testing.csv"
+
+# Download Testing file if does not exist in workspace
+if (!file.exists(DestinationTestFile)){
+  download.file(fileURL.Test, DestinationTestFile)
+}
+
+## read file into Testing data frame
+dfTest <- read.csv(DestinationTestFile,header = TRUE,stringsAsFactors = FALSE,na.strings = "NA")
+
+
+```
+
+
+###
+Data Cleaning and Exploratory Data Analysis:
+```{r chunk3}
+
+# check str (donot output)
+# str(dfTrain)
+
+# Convert Classe into factor variable for both training and test data
+dfTrain$classe <- as.factor(dfTrain$classe)
+
+# remove columns which are not required:
+# we dont require row labels or user name or new window
+dfTrain <- subset(dfTrain,select = -c(user_name,new_window,X,raw_timestamp_part_1,raw_timestamp_part_2,cvtd_timestamp,num_window))
+
+# replace any "#DIV/0!" value with NA in both training and test set
+dfTrain[dfTrain=="#DIV/0"]<-NA
+dfTest[dfTest=="#DIV/0"]<-NA
+
+# replace any empty values with NA
+dfTrain[dfTrain==""]<-NA
+dfTest[dfTest==""]<-NA
+
+# we can see that there are lot of coulmns which are with NA values
+# remove columns with more tha 95% NA values
+dfTrain <- dfTrain[, -which(colMeans(is.na(dfTrain)) > 0.95)]
+
+# Create partition in test set 90% for training and 10% for validation
+inTrain <- createDataPartition(dfTrain$classe,p=0.9,list=FALSE)
+
+# Create training and testing subsets from training data.
+dfSubTrain <- dfTrain[inTrain,]
+dfSubTest <- dfTrain[-inTrain,]
+
+```
+
+###
+Training and testing model
+```{r chunk4}
+
+#load libraries to do parallel process
+library(parallel)
+library(doParallel)
+
+# Define training control
+# I would be using 10 fold cross validation
+fitControl <- trainControl(method = "cv",
+                           number = 10,
+                           allowParallel = TRUE)
+
+
+# we will first try to train regression tree model and check the out of sample accuracy
+# Initiate cluster and register for parallel processing
+cluster <- makeCluster(detectCores() - 1) # leave one core out for CPU
+registerDoParallel(cluster)
+
+# start stop watch to start measuring time for model training
+ptm <- proc.time()
+
+# train a Regression Tree model on the training subset
+fit.rpart <- train(classe~., method="rpart",data=dfSubTrain,trControl = fitControl)
+
+# take the difference between start time and end time to measure the time take for model training
+proc.time() -ptm
+
+# Stop our created cluster and De-register from parallel processing
+stopCluster(cluster)
+registerDoSEQ()
+
+# load library rattle
+library(rattle)
+
+# check the regression tree created
+fancyRpartPlot(fit.rpart$finalModel)
+
+# we can see that our model is not able to classify model label D
+
+# Check the out of sample prediction accuracy
+confusionMatrix(dfSubTest$classe,predict(fit.rpart,dfSubTest))$overall[1]
+
+# it also hasa very low accuracy, so we would be trying with random forest
+
+# Check if the model is saved from the previous run
+# if not then train the model.
+if (!file.exists("fitrf.RData"))
+{
+
+  # Initiate cluster and register for parallel processing
+  cluster <- makeCluster(detectCores() - 1) # leave one core out for CPU
+  registerDoParallel(cluster)
+  
+  # start stop watch to start measuring time for model training
+  ptm <- proc.time()
+  
+  # fit.gbm <- train(classe~., method="gbm",data=dfSubTrain,trControl = fitControl)
+  
+  # train a Random Forest model on the training subset
+  fit.rf <- train(classe~., method="rf",data=dfSubTrain,trControl = fitControl)
+  
+  # take the difference between start time and end time to measure the time take for model    training
+  proc.time() -ptm
+  
+  # Stop our created cluster and De-register from parallel processing
+  stopCluster(cluster)
+  registerDoSEQ()
+  
+  # save the trained model on disk
+  save(fit.rf,file ="fitrf.RData")
+
+}else {
+  
+  # else load the model from disk
+
+  load("fitrf.RData")
+}
+
+# plot variable importance:
+varImpPlot(fit.rf$finalModel,main = "Random Forest")
+
+# plot varibales of importance
+plot(varImp(fit.rf))
+
+# plot accuray by predictor count
+plot(fit.rf,main=" accuracy by count of predictors")
+
+# Check the out of sample prediction accuracy
+confusionMatrix(dfSubTest$classe,predict(fit.rf,dfSubTest))$overall[1]
+
+# predict on the test sample
+predict(fit.rf,dfTest)
+
+````
+
